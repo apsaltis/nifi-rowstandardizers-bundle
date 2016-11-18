@@ -16,48 +16,35 @@
  */
 package org.apache.nifi.processors.rowstandardizers;
 
-import com.google.common.base.Joiner;
-import org.apache.avro.Schema;
-import org.apache.commons.csv.CSVFormat;
-import org.apache.commons.csv.CSVParser;
-import org.apache.commons.csv.CSVPrinter;
-import org.apache.commons.csv.CSVRecord;
-import org.apache.commons.lang3.StringUtils;
 import org.apache.nifi.components.AllowableValue;
 import org.apache.nifi.components.PropertyDescriptor;
-import org.apache.nifi.components.PropertyValue;
-import org.apache.nifi.components.Validator;
 import org.apache.nifi.flowfile.FlowFile;
 import org.apache.nifi.processor.*;
 import org.apache.nifi.annotation.behavior.ReadsAttribute;
 import org.apache.nifi.annotation.behavior.ReadsAttributes;
 import org.apache.nifi.annotation.behavior.WritesAttribute;
 import org.apache.nifi.annotation.behavior.WritesAttributes;
-import org.apache.nifi.annotation.lifecycle.OnScheduled;
 import org.apache.nifi.annotation.documentation.CapabilityDescription;
 import org.apache.nifi.annotation.documentation.SeeAlso;
 import org.apache.nifi.annotation.documentation.Tags;
 import org.apache.nifi.processor.exception.ProcessException;
+import org.apache.nifi.processor.io.StreamCallback;
 import org.apache.nifi.processor.util.StandardValidators;
 import org.apache.nifi.stream.io.BufferedInputStream;
-import org.joda.time.LocalDate;
-import org.joda.time.format.DateTimeFormat;
-import org.joda.time.format.DateTimeFormatter;
+import org.apache.nifi.stream.io.BufferedOutputStream;
+import org.apache.nifi.util.StopWatch;
 
 import java.io.IOException;
-import java.io.InputStreamReader;
-import java.nio.charset.Charset;
-import java.text.NumberFormat;
-import java.text.ParseException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.*;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.stream.Collectors;
+import java.util.concurrent.TimeUnit;
 
-@Tags({"text formating standardization "})
+@Tags({"text formatting standardization"})
 @CapabilityDescription("Removes embedded newlines from a delimited row in a file")
 @SeeAlso({})
-@ReadsAttributes({@ReadsAttribute(attribute="", description="")})
-@WritesAttributes({@WritesAttribute(attribute="", description="")})
+@ReadsAttributes({@ReadsAttribute(attribute = "", description = "")})
+@WritesAttributes({@WritesAttribute(attribute = "", description = "")})
 public class EmbeddedNewLineRemover extends AbstractProcessor {
 
     private static final AllowableValue TAB = new AllowableValue(Character.toString('\t'), "Tab");
@@ -101,7 +88,10 @@ public class EmbeddedNewLineRemover extends AbstractProcessor {
             .description("validation errors")
             .build();
 
-
+    private static final Relationship REL_FAILURE = new Relationship.Builder()
+            .name("failure")
+            .description("Failure relationship")
+            .build();
 
 
     private List<PropertyDescriptor> descriptors;
@@ -141,58 +131,69 @@ public class EmbeddedNewLineRemover extends AbstractProcessor {
             return;
         }
 
+        final StopWatch stopWatch = new StopWatch(true);
         final char inputDelimiter = context.getProperty(INPUT_DELIMITER).getValue().charAt(0);
         final int numColumns = context.getProperty(NUM_COLUMNS).evaluateAttributeExpressions().asInteger();
 
-        final StringBuilder cleanLines = new StringBuilder();
-        session.read(flowFile, in -> {
-            try (BufferedInputStream streamReader = new BufferedInputStream(in)) {
-                cleanLines.append(stripNewLines(streamReader, inputDelimiter, numColumns));
-            }
-        });
+        try {
+            flowFile = session.write(flowFile, new StreamCallback() {
+                @Override
+                public void process(final InputStream rawIn, final OutputStream rawOut) throws IOException {
 
-        flowFile = session.write(flowFile, out -> out.write(cleanLines.toString().getBytes()));
-        session.transfer(flowFile, SUCCESS);
-
+                    try (final OutputStream bufferedOut = new BufferedOutputStream(rawOut, 65536);
+                         final InputStream bufferedIn = new BufferedInputStream(rawIn, 65536)) {
+                        stripNewLines(bufferedIn, bufferedOut, inputDelimiter,numColumns);
+                        bufferedOut.flush();
+                    }
+                }
+            });
+            stopWatch.stop();
+            session.getProvenanceReporter().modifyContent(flowFile, stopWatch.getDuration(TimeUnit.MILLISECONDS));
+            session.transfer(flowFile, SUCCESS);
+        } catch (final ProcessException e) {
+            session.transfer(flowFile, REL_FAILURE);
+            throw e;
+        }
     }
 
-    protected String stripNewLines(BufferedInputStream streamReader, final char delimiter, int numColumns) throws IOException {
 
-        final StringBuilder out = new StringBuilder();
+
+    protected void stripNewLines(final InputStream bufferedIn, final OutputStream bufferedOut, final char delimiter, int numColumns) throws IOException {
+
         int columnsSeen = 0;
-        int currentChar = streamReader.read();
+        int currentChar = bufferedIn.read();
 
-        while(-1 != currentChar ){
+        while (-1 != currentChar) {
             if (columnsSeen < numColumns) {
-                if ((char)currentChar == delimiter) {
+                if ((char) currentChar == delimiter) {
                     columnsSeen++;
-                    out.append((char)currentChar);
+                    bufferedOut.write((char) currentChar);
                 } else {
                     if (currentChar != 10 && currentChar != 13) {
-                        out.append((char)currentChar);
+                        bufferedOut.write((char) currentChar);
                     }
 
-                    streamReader.mark(1);
-                    int nextChar = streamReader.read();
+                    bufferedIn.mark(1);
+                    int nextChar = bufferedIn.read();
 
-                    if((nextChar == 10 || nextChar == 13) && (columnsSeen +1 == numColumns)) {
-                        out.append((char)nextChar);
+                    if ((nextChar == 10 || nextChar == 13) && (columnsSeen + 1 == numColumns)) {
+                        bufferedOut.write((char) nextChar);
                         columnsSeen++;
-                    }else{
-                        streamReader.reset();
+                    } else {
+                        bufferedIn.reset();
                     }
                 }
 
-            }else{
+            } else {
                 //This should handle valid non-newline characters, as there maybe new-lines
-                if(currentChar != 10 && currentChar != 13) {
-                    out.append((char) currentChar);
+                if (currentChar != 10 && currentChar != 13) {
+                    bufferedOut.write((char) currentChar);
                     columnsSeen = 0;
-               }
+                }
             }
 
-            currentChar = streamReader.read();
+            currentChar = bufferedIn.read();
         }
-        return out.toString();
+
     }
 }

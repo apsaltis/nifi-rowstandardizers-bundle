@@ -17,7 +17,9 @@
 package org.apache.nifi.processors.rowstandardizers;
 
 import org.apache.nifi.stream.io.BufferedInputStream;
+import org.apache.nifi.stream.io.BufferedOutputStream;
 import org.apache.nifi.stream.io.ByteArrayInputStream;
+import org.apache.nifi.stream.io.ByteArrayOutputStream;
 import org.apache.nifi.util.TestRunner;
 import org.apache.nifi.util.TestRunners;
 import org.junit.Assert;
@@ -26,7 +28,10 @@ import org.junit.Test;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.io.StringReader;
+import java.nio.charset.StandardCharsets;
 
 
 public class EmbeddedNewLineRemoverTest {
@@ -48,15 +53,21 @@ public class EmbeddedNewLineRemoverTest {
 
         EmbeddedNewLineRemover formatDelimitedRow = new EmbeddedNewLineRemover();
 
+        final ByteArrayOutputStream bufferedOut = new ByteArrayOutputStream();
         String dirtyLine = "11/3/16 15:43:12,4,I,ASDF,\"qw\\n ert \\n y126\",ABC,103.40000,tsf4,20.68000";
-        String cleanRow = formatDelimitedRow.stripNewLines(new BufferedInputStream(new ByteArrayInputStream(dirtyLine.getBytes())),',',9);
+        formatDelimitedRow.stripNewLines(new BufferedInputStream(new ByteArrayInputStream(dirtyLine.getBytes())),bufferedOut,',',9);
+
+        //bufferedOut.toString(StandardCharsets.UTF_8.name());
+        String cleanRow = bufferedOut.toString(StandardCharsets.UTF_8.name());
         String[] splits = cleanRow.split("\n");
         Assert.assertTrue(1 == splits.length);
         dirtyLine = "11/3/16 15:43:14,6,I,ASDF,\"qwerty\\n 128\",ABC\n" +
                 ",105.60000,tsf6,\n" +
                 "21.12000";
 
-        cleanRow = formatDelimitedRow.stripNewLines(new BufferedInputStream(new ByteArrayInputStream(dirtyLine.getBytes())),',',9);
+        bufferedOut.reset();
+        formatDelimitedRow.stripNewLines(new BufferedInputStream(new ByteArrayInputStream(dirtyLine.getBytes())),bufferedOut,',',9);
+        cleanRow = bufferedOut.toString(StandardCharsets.UTF_8.name());
         splits = cleanRow.split("\n");
         Assert.assertTrue(1 == splits.length);
     }
@@ -73,7 +84,9 @@ public class EmbeddedNewLineRemoverTest {
                 "11/3/16 15:43:18,11,I,ASDF,\n" +
                 "\n" +
                 "qwerty133,XZY,111.10000,tsf11,22.22000";
-        String cleanRow = formatDelimitedRow.stripNewLines(new BufferedInputStream(new ByteArrayInputStream(dirtyLine.getBytes())),',',9);
+        final ByteArrayOutputStream bufferedOut = new ByteArrayOutputStream();
+        formatDelimitedRow.stripNewLines(new BufferedInputStream(new ByteArrayInputStream(dirtyLine.getBytes())),bufferedOut,',',9);
+        final String cleanRow = bufferedOut.toString(StandardCharsets.UTF_8.name());
         final String[] splits = cleanRow.split("\n");
         Assert.assertTrue(2 == splits.length);
 
