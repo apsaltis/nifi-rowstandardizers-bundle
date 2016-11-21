@@ -160,39 +160,67 @@ public class EmbeddedNewLineRemover extends AbstractProcessor {
 
     protected void stripNewLines(final InputStream bufferedIn, final OutputStream bufferedOut, final char delimiter, int numColumns) throws IOException {
 
-        int columnsSeen = 0;
+        int currentColumn = 1;
+        int lastNewLinePosition = 0;
         int currentChar = bufferedIn.read();
 
+        //assumes a column is not more than 1K in size, if so we may need to double it
+        int[] currentColumnBuffer = new int[2048];
+        int currentColumnPos = 0;
         while (-1 != currentChar) {
-            if (columnsSeen < numColumns) {
+            if (currentColumn < numColumns) {
                 if ((char) currentChar == delimiter) {
-                    columnsSeen++;
+                    currentColumn++;
+                    //need to drain the currentColumn buffer and ignore all \n that we may see.
+                    for(int i = 0; i < currentColumnPos; i++) {
+                        if (currentColumnBuffer[i] != 10 && currentColumnBuffer[i] != 13) {
+                            bufferedOut.write((char) currentColumnBuffer[i]);
+                        }
+                    }
                     bufferedOut.write((char) currentChar);
+                    currentColumnPos = 0;
                 } else {
-                    if (currentChar != 10 && currentChar != 13) {
-                        bufferedOut.write((char) currentChar);
-                    }
-
-                    bufferedIn.mark(1);
-                    int nextChar = bufferedIn.read();
-
-                    if ((nextChar == 10 || nextChar == 13) && (columnsSeen + 1 == numColumns)) {
-                        bufferedOut.write((char) nextChar);
-                        columnsSeen++;
-                    } else {
-                        bufferedIn.reset();
-                    }
+                    currentColumnBuffer[currentColumnPos] = currentChar;
+                    currentColumnPos++;
                 }
 
             } else {
-                //This should handle valid non-newline characters, as there maybe new-lines
-                if (currentChar != 10 && currentChar != 13) {
+                //we are at the last column and need to keep processing till we hit a delimiter, at which time we
+                //need to write out the buffer, only including the last \n and the first column, then we need to mark
+                //the currentColumn = 2
+                if ((char) currentChar == delimiter) {
+
+                    //need to drain the currentColumn buffer and ignore all \n that we may see.
+                    for(int i = 0; i < currentColumnPos; i++) {
+                        if (currentColumnBuffer[i] != 10 && currentColumnBuffer[i] != 13) {
+                            bufferedOut.write((char) currentColumnBuffer[i]);
+                        }else{
+                            if(i == lastNewLinePosition){
+                                bufferedOut.write((char) currentColumnBuffer[i]);
+                                currentColumn = 2;
+                                lastNewLinePosition = 0;
+                            }
+                        }
+                    }
                     bufferedOut.write((char) currentChar);
-                    columnsSeen = 0;
+                    currentColumnPos = 0;
+                } else {
+                    currentColumnBuffer[currentColumnPos] = currentChar;
+                    if (currentChar == 10 || currentChar == 13) {
+                        lastNewLinePosition = currentColumnPos;
+                    }
+
+                    currentColumnPos++;
                 }
             }
 
             currentChar = bufferedIn.read();
+        }
+        //need to drain any data left in the buffer as we may have been reading the last column.
+        for(int i = 0; i < currentColumnPos; i++) {
+            if (currentColumnBuffer[i] != 10 && currentColumnBuffer[i] != 13) {
+                bufferedOut.write((char) currentColumnBuffer[i]);
+            }
         }
 
     }
