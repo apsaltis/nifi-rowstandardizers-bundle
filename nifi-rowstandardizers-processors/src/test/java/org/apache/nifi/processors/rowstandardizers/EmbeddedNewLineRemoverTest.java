@@ -111,4 +111,23 @@ public class EmbeddedNewLineRemoverTest {
         Assert.assertTrue(6 == splits.length);
         //now walk each line and make sure there is text for each of the 13 columns...
     }
+    @Test
+    public void TestDanglingLastColumn2() throws IOException {
+        String input = "2016/11/14,abcde,oxoooo,abc,Anne,29568,82569,abc1,2016/11/14,2016/11/14,abcde,2016/11/14,2016/11/14\n" +
+                "2016/11/14,abcde,oxoooo,abc,Anne,80111,52966,abc1,2016/11/14,2016/11/14,abcde,2016/11/14,2016/11/14\n" +
+                "2016/11/14,abcde,oxoooo,abc,Anne,3844,62645,abc1,2016/11/14,2016/11/14,abcde,2016/11/14,\n" +
+                "\n" +
+                "2016/11/14\n" +
+                "2016/11/14,abcde,oxoooo,abc,Anne,78991,62974,abc1,2016/11/14,2016/11/14,abcde,2016/11/14,2016/11/14\n" +
+                "2016/11/14,abcde,oxoooo,abc,Anne,23773,17965,abc1,2016/11/14,2016/11/14,abcde,2016/11/14,2016/11/14\n" +
+                "2016/11/14,abcde,oxoooo,abc,Anne,90656,17434,abc1,2016/11/14,2016/11/14,abcde,2016/11/14,2016/11/14";
+
+        EmbeddedNewLineRemover formatDelimitedRow = new EmbeddedNewLineRemover();
+        final ByteArrayOutputStream bufferedOut = new ByteArrayOutputStream();
+        formatDelimitedRow.stripNewLines(new BufferedInputStream(new ByteArrayInputStream(input.getBytes())),bufferedOut,',',13);
+        final String cleanRow = bufferedOut.toString(StandardCharsets.UTF_8.name());
+        final String[] splits = cleanRow.split("\n");
+        Assert.assertTrue(6 == splits.length);
+        //now walk each line and make sure there is text for each of the 13 columns...
+    }
 }
