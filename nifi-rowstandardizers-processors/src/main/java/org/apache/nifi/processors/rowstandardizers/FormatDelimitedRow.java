@@ -77,6 +77,17 @@ public class FormatDelimitedRow extends AbstractProcessor {
     private static final AllowableValue TICK_MARK = new AllowableValue(Character.toString('`'), "Tick Mark");
     private static final AllowableValue DOUBLE_QUOTE = new AllowableValue(Character.toString('"'), "Double Quote");
 
+    private static final AllowableValue TRUE = new AllowableValue("True");
+    private static final AllowableValue FALSE = new AllowableValue("False");
+
+    public static final PropertyDescriptor HEADER_LINE = new PropertyDescriptor.Builder()
+            .name("Header Line")
+            .description("The first line of the file contains the header row.")
+            .required(false)
+            .allowableValues(TRUE, FALSE)
+            .defaultValue(TRUE.getValue())
+            .build();
+
     private static final PropertyDescriptor INPUT_DELIMITER = new PropertyDescriptor
             .Builder().name("Input Delimiter")
             .description("Example Property")
@@ -156,6 +167,7 @@ public class FormatDelimitedRow extends AbstractProcessor {
     protected void init(final ProcessorInitializationContext context) {
 
         final List<PropertyDescriptor> descriptors = new ArrayList<PropertyDescriptor>();
+        descriptors.add(HEADER_LINE);
         descriptors.add(INPUT_DELIMITER);
         descriptors.add(AVRO_SCHEMA);
         descriptors.add(INPUT_QUOTE_CHARACTER);
@@ -195,6 +207,7 @@ public class FormatDelimitedRow extends AbstractProcessor {
         final AtomicReference<String> fileHeader = new AtomicReference<>();
 
         // don't support expressions
+        final boolean firstLineIsHeader = context.getProperty(HEADER_LINE).asBoolean();
         final char inputDelimiter = context.getProperty(INPUT_DELIMITER).getValue().charAt(0);
         final char outputDelimiter = context.getProperty(OUTPUT_DELIMITER).getValue().charAt(0);
         final String inputQuoteCharacter = context.getProperty(INPUT_QUOTE_CHARACTER).getValue();
@@ -216,60 +229,101 @@ public class FormatDelimitedRow extends AbstractProcessor {
         final long flowFileId = flowFile.getId();
         final String filename = flowFile.getAttribute("filename");
 
-        final CSVFormat parserFormat = CSVFormat.newFormat(inputDelimiter)
-                .withIgnoreEmptyLines()
-                .withHeader()
-                .withIgnoreSurroundingSpaces()
-                .withQuote(getCharacter(inputQuoteCharacter))
-                .withTrim();
 
         // we don't want to print the header with the new FlowFile
-        final CSVFormat printerFormat = CSVFormat.newFormat(outputDelimiter)
-                .withRecordSeparator(recordSeparator);
 
         List<ValidationError> errors = new ArrayList<>();
 
-        session.read(flowFile, in -> {
+        if(firstLineIsHeader) {
 
-            StringBuilder output = new StringBuilder();
+            final CSVFormat parserFormat = CSVFormat.newFormat(inputDelimiter)
+                    .withIgnoreEmptyLines()
+                    .withHeader()
+                    .withIgnoreSurroundingSpaces()
+                    .withQuote(getCharacter(inputQuoteCharacter))
+                    .withTrim();
 
-            try (
-                    InputStreamReader streamReader = new InputStreamReader(in, Charset.forName(inputCharset));
-                    CSVParser parser = parserFormat.parse(streamReader);
-                    CSVPrinter printer = new CSVPrinter(output, printerFormat)
-            ) {
+            final CSVFormat printerFormat = CSVFormat.newFormat(outputDelimiter)
+                    .withRecordSeparator(recordSeparator);
 
-                final Set<String> rawHeaders = parser.getHeaderMap().keySet();
+            session.read(flowFile, in -> {
 
-                // todo: this is kind of ugly; can't we clean headers once & use everywhere
-                fileHeader.set(Joiner.on(outputDelimiter).join(cleanHeaders(rawHeaders)));
+                StringBuilder output = new StringBuilder();
 
-                final List<CSVRecord> records = parser.getRecords();
+                try (
+                        InputStreamReader streamReader = new InputStreamReader(in, Charset.forName(inputCharset));
+                        CSVParser parser = parserFormat.parse(streamReader);
+                        CSVPrinter printer = new CSVPrinter(output, printerFormat)
+                ) {
 
-                for (CSVRecord record : records) {
+                    final Set<String> rawHeaders = parser.getHeaderMap().keySet();
 
-                    List<String> values = new ArrayList<>();
+                    // todo: this is kind of ugly; can't we clean headers once & use everywhere
+                    fileHeader.set(Joiner.on(outputDelimiter).join(cleanHeaders(rawHeaders)));
 
-                    for (String rawHeader : rawHeaders) {
+                    final List<CSVRecord> records = parser.getRecords();
 
-                        // todo: this is kind of ugly; can't we clean headers once & use everywhere
-                        Schema.Field field = schema.getField(cleanHeader(rawHeader));
+                    for (CSVRecord record : records) {
 
-                        String formattedValue = formatValue(record, field, rawHeader, numberFormat, filename, flowFileId, errors);
+                        List<String> values = new ArrayList<>();
 
-                        values.add(formattedValue);
+                        for (String rawHeader : rawHeaders) {
+
+                            // todo: this is kind of ugly; can't we clean headers once & use everywhere
+                            Schema.Field field = schema.getField(cleanHeader(rawHeader));
+
+                            String formattedValue = formatValue(record, field, rawHeader, numberFormat, filename, flowFileId, errors);
+
+                            values.add(formattedValue);
+                        }
+
+                        printer.printRecord(values);
+
                     }
 
-                    printer.printRecord(values);
+                    fileContent.set(output.toString());
 
                 }
+            });
 
-                fileContent.set(output.toString());
+            flowFile = session.putAttribute(flowFile, "fragment.out.header", fileHeader.get());
+        }else{
+            //the first line does not have the header, so we can deal with the values differently.
+            final CSVFormat parserFormat = CSVFormat.newFormat(inputDelimiter)
+                    .withIgnoreEmptyLines()
+                    .withIgnoreSurroundingSpaces()
+                    .withQuote(getCharacter(inputQuoteCharacter))
+                    .withTrim();
 
-            }
-        });
+            final CSVFormat printerFormat = CSVFormat.newFormat(outputDelimiter)
+                    .withRecordSeparator(recordSeparator);
 
-        flowFile = session.putAttribute(flowFile, "fragment.out.header", fileHeader.get());
+            session.read(flowFile, in -> {
+
+                StringBuilder output = new StringBuilder();
+
+                try (
+                        InputStreamReader streamReader = new InputStreamReader(in, Charset.forName(inputCharset));
+                        CSVParser parser = parserFormat.parse(streamReader);
+                        CSVPrinter printer = new CSVPrinter(output, printerFormat)
+                ) {
+
+                    final List<CSVRecord> records = parser.getRecords();
+
+                    for (CSVRecord record : records) {
+
+                        List<String> values = new ArrayList<>();
+
+                        for (Schema.Field field : schema.getFields()) {
+                            String formattedValue = formatValue(record, field, field.name(), numberFormat, filename, flowFileId, errors);
+                            values.add(formattedValue);
+                        }
+                        printer.printRecord(values);
+                    }
+                    fileContent.set(output.toString());
+                }
+            });
+        }
         flowFile = session.putAttribute(flowFile, "fragment.out.delimiter", Character.toString(outputDelimiter));
         flowFile = session.putAttribute(flowFile, "fragment.out.separator", recordSeparator);
 
